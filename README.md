@@ -7,4 +7,7 @@ The first input file is used to get the configuration of the whole memory. It de
 The second input file is the execution file includes the command type and the address.
 
 This code also deals with different kind of miss types: compulsory miss, capacity miss, and conflict miss.
-Example can be seen in the photo.
+Example can be seen below.
+
+![alt text](https://raw.githubusercontent.com/HanxinHua/cache-simulator/master/1.png)
+![alt text](https://raw.githubusercontent.com/HanxinHua/cache-simulator/master/2.png)

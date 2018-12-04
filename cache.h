@@ -7,6 +7,7 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <unordered_set>
 
 using std::list; 
 using std::vector;
@@ -17,6 +18,8 @@ using std::stoi;
 using std::ifstream;
 using std::string;
 using std::stringstream;
+using std::unordered_set;
+using std::to_string;
 
 class configuration {
 public:
@@ -75,19 +78,27 @@ public:
 	int aowm; //1: allocate on write miss and 0: not
 	int level, l1, l2;
 	vector<int> hitcount, misscount;
+	vector<vector<int> >misstype;
 	vector<vector<int> > address;	
     vector<unordered_map<int, int> > set; //tag, A
     vector<list<int> > lrutag;
 	vector<vector<bool> > v; //valid
 	vector<vector<bool> > dirtybit;	
+	unordered_set<string> visit;
+	unordered_set<int> visitaddr;
 	cache * next, * next2;
+	int blockhold;
+	int step;
+	unordered_map<string,int> reference; //block with step
 	
-    cache(int a, int b, int c, int w, int ao, int l, int n1, int n2, cache * n, cache * ntwo):A(a), B(b), C(c), way(w), aowm(ao), level(l), l1(n1), l2(n2),hitcount(vector<int>(3,0)), misscount(vector<int>(3,0)),address(vector<vector<int> >(C/B/A, vector<int>(A,0))), v(vector<vector<bool> >(C/B/A, vector<bool>(A,0))), dirtybit(vector<vector<bool> >(C/B/A, vector<bool>(A,0))) {
+    cache(int a, int b, int c, int w, int ao, int l, int n1, int n2, cache * n, cache * ntwo):A(a), B(b), C(c), way(w), aowm(ao), level(l), l1(n1), l2(n2),hitcount(vector<int>(3,0)), misscount(vector<int>(3,0)),misstype(vector<vector<int> >(3, vector<int>(3,0))),address(vector<vector<int> >(C/B/A, vector<int>(A,0))), v(vector<vector<bool> >(C/B/A, vector<bool>(A,0))), dirtybit(vector<vector<bool> >(C/B/A, vector<bool>(A,0))) {
 		num_set = C/B/A;
 		set.assign(num_set, unordered_map<int, int>());
 		lrutag.assign(num_set, list<int>());
 		next = n;
 		next2 = ntwo;
+		blockhold = A*num_set;
+		step = 0;
 	}
 	 
 	int getIndex (int addr) {
@@ -132,6 +143,7 @@ public:
 	}
 	
 	void search (int addr,  int ctype) {
+		step++;
 		if (level == 3) {//main memory
 			hitcount[ctype]++;
 			return;
@@ -139,6 +151,8 @@ public:
 		int index = getIndex(addr);
 		int tag = getTag(addr);
 		int waydex;
+		string block;
+		block = to_string(tag)+","+ to_string(index);
 		if (set[index].find(tag)!=set[index].end()) {//match the tag
 			waydex = set[index][tag];
 			if (v[index][waydex]) {//valid is true
@@ -147,9 +161,14 @@ public:
 				address[index][waydex]=addr;
 				lrutag[index].remove(tag);
 				lrutag[index].push_back(tag);
+				reference[block]=step;
 			}
 			else {
-				misscount[ctype]++;
+				cout<<"here"<<endl;
+				misscount[ctype]++;				
+				visit.insert(block);
+				misstype[ctype][0]++;
+				reference[block]=step;
 				if (level == 1 && l1 == 1 && l2 == 2 && ctype == 2) next2->search(addr, ctype);
 				else next->search(addr, ctype);
 				if (aowm || !(ctype%2)) {
@@ -175,6 +194,26 @@ public:
 					lrutag[index].push_back(tag);
 				}
 			}
+			if (visit.find(block) == visit.end()) {
+				misstype[ctype][0]++;
+				visit.insert(block);
+				reference[block]=step;
+				return;
+			}
+			if (reference.find(block) != reference.end()) {
+				int old = reference[block];
+				int unique = 0;
+				for (auto it = reference.begin(); it != reference.end(); it++) {
+					if (it->second > old) unique++;
+				}
+				if (unique > blockhold) {
+					misstype[ctype][2]++;
+					reference[block]=step;
+					return;
+				}
+			}
+			reference[block]=step;
+			misstype[ctype][1]++;
 		}
 	}
 	
@@ -189,6 +228,9 @@ public:
 	  int miss;
 	  double fot;
 	  double missRate;
+	  int conflict;
+	  int compulsory;
+	  int capacity;
   };
   
   int l1, l2;
@@ -342,23 +384,38 @@ public:
 	
 	instrn.fetch = c->hitcount[2] + c->misscount[2];
     instrn.miss = c->misscount[2];
+	instrn.compulsory = c->misstype[2][0];
+	instrn.conflict = c->misstype[2][1];
+	instrn.capacity = c->misstype[2][2];
     instrn.missRate = ( instrn.fetch != 0 ) ? (double)instrn.miss/instrn.fetch : 0;
 	
 	read.fetch = c->hitcount[0] + c->misscount[0];
     read.miss = c->misscount[0];
+	read.compulsory = c->misstype[0][0];
+	read.conflict = c->misstype[0][1];
+	read.capacity = c->misstype[0][2];
     read.missRate = (read.fetch!=0) ? (double)read.miss /read.fetch : 0;
 	
 	write.fetch = c->hitcount[1] + c->misscount[1];
     write.miss = c->misscount[1];
+	write.compulsory = c->misstype[1][0];
+	write.conflict = c->misstype[1][1];
+	write.capacity = c->misstype[1][2];
     write.missRate = (write.fetch != 0) ? (double)write.miss/write.fetch : 0;
 
     
     data.fetch = read.fetch + write.fetch;
-    data.miss = read.miss + write.miss;    
+    data.miss = read.miss + write.miss;
+    data.compulsory = read.compulsory + write.compulsory;
+	data.conflict = read.conflict + write.conflict;
+	data.capacity = read.capacity + write.capacity;
     data.missRate = (data.fetch!=0) ? (double)data.miss /data.fetch : 0;
        
     total.fetch = data.fetch + instrn.fetch;
     total.miss = data.miss + instrn.miss;
+	total.compulsory = data.compulsory + instrn.compulsory;
+	total.conflict = data.conflict + instrn.conflict;
+	total.capacity = data.capacity + instrn.capacity;
     total.missRate =(total.fetch!=0) ? (double)total.miss /total.fetch : 0;
 
     instrn.fot = (double)instrn.fetch/total.fetch;
@@ -377,6 +434,9 @@ public:
     cout <<endl;
 	cout <<std::showpoint<<std::fixed<<"Demand Misses    "<<"\t\t"<<total.miss<<"\t\t"<<instrn.miss<<"\t\t"<<data.miss<<"\t\t"<<read.miss<<"\t\t"<<write.miss<<"\t\t0"<<endl;
     cout <<std::showpoint<<std::fixed<<" Demond miss rate "<<"\t\t"<<total.missRate<<"\t\t"<<instrn.missRate<<"\t\t"<<data.missRate<<"\t\t"<<read.missRate<<"\t\t"<<write.missRate<<"\t\t0.0000"<<endl;
+    cout <<std::showpoint<<std::fixed<<"  Compulsory misses"<<"\t\t"<<total.compulsory<<"\t\t"<<instrn.compulsory<<"\t\t"<<data.compulsory<<"\t\t"<<read.compulsory<<"\t\t"<<write.compulsory<<"\t\t0"<<endl;
+	cout <<std::showpoint<<std::fixed<<"  Capacity misses  "<<"\t\t"<<total.capacity<<"\t\t"<<instrn.capacity<<"\t\t"<<data.capacity<<"\t\t"<<read.capacity<<"\t\t"<<write.capacity<<"\t\t0"<<endl;
+	cout <<std::showpoint<<std::fixed<<"  Conflict misses  "<<"\t\t"<<total.conflict<<"\t\t"<<instrn.conflict<<"\t\t"<<data.conflict<<"\t\t"<<read.conflict<<"\t\t"<<write.conflict<<"\t\t0"<<endl;
 	vector<double> m = {total.missRate, instrn.missRate, data.missRate};
 	return m;
   }
